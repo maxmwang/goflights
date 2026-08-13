@@ -1,0 +1,89 @@
+syntax = "proto3";
+
+// Import for Class reuse
+import "internal/pb/request.proto";
+
+option go_package = "github.com/maxmwang/goflights/internal/pb";
+
+// The results page carries every itinerary twice: once as a JSON array in an
+// AF_initDataCallback block, and once as a protobuf token attached to that
+// itinerary's record. This file describes the token.
+//
+// The token is standard base64 with padding — not the URL-safe unpadded
+// encoding the tfs request parameter uses.
+//
+// The token is the better source for the flight itself — exact fares in minor
+// units, timestamps with UTC offsets, flight numbers. It carries no display
+// data, so airport names, aircraft names and carbon emissions remain
+// JSON-only.
+
+message Segment {
+  // Airports are IATA codes; the full names appear only in the JSON. Times
+  // are ISO-8601 with the local UTC offset.
+  string from_airport = 1;
+  string departure_time = 2;
+  string to_airport = 3;
+  string arrival_time = 4;
+
+  string airline = 5;
+  string flight_number = 6;
+
+  // Duplicates airline/flight_number in every sample observed, including
+  // true codeshares — where the operator ("SkyWest Airlines as American
+  // Eagle") appears only in the JSON. Not the operating airline.
+  string ticketing_airline = 7;
+  string ticketing_flight_number = 8;
+
+  Class class = 9;
+
+  // IATA aircraft type code, e.g. "321". The JSON spells it "Airbus A321".
+  string aircraft = 10;
+}
+
+// Slice is one direction of travel. Only ever one per token so far: a round
+// trip search returns tokens for the outbound leg, and the return is chosen
+// against a follow-up request.
+message Slice {
+  repeated Segment segments = 1;
+}
+
+message Airlines {
+  // Display names in segment order, e.g. ["Alaska", "Condor"].
+  repeated string names = 1;
+}
+
+message PassengerCount {
+  // Confirmed by varying the request: 3 is an adult and 2 is a child. Note
+  // this does not match the request's Passenger enum, where ADULT is 1.
+  // Infant values were not observed.
+  int32 type = 1;
+  int32 count = 2;
+}
+
+message Fare {
+  // Amount in the currency's minor units, scaled by decimal_digits, so
+  // 19920 with 2 digits is 199.20. The JSON rounds this to whole units.
+  int64 amount = 1;
+}
+
+message Trip {
+  repeated Slice slices = 1;
+
+  repeated PassengerCount passengers = 2;
+
+  // Always 1 and 0 respectively across every sample. Marked optional so the
+  // explicit zero survives a re-encode, which proto3 would otherwise drop.
+  optional int32 unknown_3 = 3;
+  optional int32 unknown_5 = 5;
+
+  Airlines airlines = 6;
+}
+
+message BookingToken {
+  // Decimal places for fare amounts: 2 for USD, 0 for JPY. Optional because
+  // the zero is written explicitly and must survive a re-encode.
+  optional int32 decimal_digits = 1;
+  string currency = 2;
+  Fare fare = 3;
+  Trip trip = 4;
+}

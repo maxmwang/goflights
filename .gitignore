@@ -1,0 +1,9 @@
+.idea
+.env
+
+*.csv
+*.txt
+*.db
+*.html
+
+build

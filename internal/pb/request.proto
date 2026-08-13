@@ -1,0 +1,114 @@
+syntax = "proto3";
+
+option go_package = "github.com/maxmwang/goflights/internal/pb";
+
+// The search request, base64url-encoded (unpadded) into the tfs query
+// parameter of a GET against /travel/flights.
+
+message Airport {
+  // IATA code. Metro codes work too.
+  string code = 2;
+}
+
+enum Emissions {
+  EMISSIONS_UNSPECIFIED = 0;
+  EMISSIONS_LESS_ONLY = 1;
+}
+
+// Looks very similar to Segment in response.proto. Possibly the same, but in
+// practice, SelectedSegment does not need all the fields in Segment to be
+// populated.
+message SelectedSegment {
+  string from_airport = 1;
+  // The segment's own departure date, YYYY-MM-DD. A late connection lands on
+  // the following day, so this is not always the leg's date. An ISO-8601
+  // timestamp here is rejected outright.
+  string date = 2;
+  string to_airport = 3;
+
+  string airline = 5;
+  string flight_number = 6;
+}
+
+message FlightInfo {
+  // The flight's requested departure date, YYYY-MM-DD.
+  string date = 2;
+
+  // Segments already chosen for this leg, in travel order, empty on a first
+  // search. Populating leg N makes the search return options for leg N+1:
+  // a round trip with the outbound selected comes back as return flights,
+  // with the best-flights section null and everything in the second section.
+  //
+  // The set must be complete. A connecting outbound needs both of its
+  // segments; supplying only the first returned the outbound list unchanged,
+  // and supplying only the second was an error.
+  repeated SelectedSegment selected_segments = 4;
+
+  optional int32 max_stops = 5;
+
+  repeated string airlines = 6;
+
+  optional int32 earliest_departure_hour = 8;
+  optional int32 latest_departure_hour = 9;
+  optional int32 earliest_arrival_hour = 10;
+  optional int32 latest_arrival_hour = 11;
+
+  optional int32 max_duration_minutes = 12;
+
+  repeated Airport from = 13;
+  repeated Airport to = 14;
+
+  repeated string connecting_airports = 15;
+  optional int32 min_layover_minutes = 17;
+  optional int32 max_layover_minutes = 18;
+
+  repeated Emissions emissions = 19;
+}
+
+enum Passenger {
+  PASSENGER_UNSPECIFIED = 0;
+  PASSENGER_ADULT = 1;
+  PASSENGER_CHILD = 2;
+  PASSENGER_INFANT_IN_SEAT = 3;
+  PASSENGER_INFANT_ON_LAP = 4;
+}
+
+message Baggage {
+  optional int32 carry_on_bag = 2;
+  optional int32 checked_bag = 3;
+}
+
+enum Class {
+  CLASS_UNSPECIFIED = 0;
+  CLASS_ECONOMY = 1;
+  CLASS_PREMIUM_ECONOMY = 2;
+  CLASS_BUSINESS = 3;
+  CLASS_FIRST = 4;
+}
+
+enum TripType {
+  TRIP_TYPE_UNSPECIFIED = 0;
+  TRIP_TYPE_ROUND_TRIP = 1;
+  TRIP_TYPE_ONE_WAY = 2;
+  TRIP_TYPE_MULTI_CITY = 3;
+}
+
+message Request {
+  repeated FlightInfo flights = 3;
+
+  repeated Passenger passengers = 8;
+
+  Class class = 9;
+
+  optional int32 max_price = 12;
+
+  Baggage baggage = 13;
+
+  optional bool hide_separate_and_self_transfer = 17;
+
+  // Optional in practice: omitting it entirely returned results identical to
+  // ONE_WAY, so the server infers the trip from the number of legs.
+  TripType trip_type = 19;
+
+  optional bool exclude_basic_economy = 25;
+}
