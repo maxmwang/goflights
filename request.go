@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -688,8 +689,26 @@ func (r *Request) URL() (*url.URL, error) {
 	return u, nil
 }
 
+// Execute runs the search and returns the itineraries on the first page of
+// results, in the order Google ranked them, using http.DefaultClient.
+//
+// It returns ErrNoFlights when the search matched nothing, and
+// ErrPartialResults — alongside the itineraries it did get — when Google
+// withheld the rest.
 func (r *Request) Execute(ctx context.Context) ([]FlightOption, error) {
-	return search(ctx, r)
+	return search(ctx, r, http.DefaultClient, nil)
+}
+
+// ExecuteWith is Execute run against the given client and headers, for callers
+// who need their own timeout, transport, proxy, instrumentation or identity.
+// Both arguments are optional: a nil client falls back to http.DefaultClient,
+// and a nil header sends only the defaults.
+//
+// Entries in header replace the default of the same name rather than adding to
+// it, and any other entry is sent as well. Overriding User-Agent is the usual
+// reason to pass one.
+func (r *Request) ExecuteWith(ctx context.Context, client *http.Client, header http.Header) ([]FlightOption, error) {
+	return search(ctx, r, client, header)
 }
 
 func airports(codes []string) []*pb.Airport {

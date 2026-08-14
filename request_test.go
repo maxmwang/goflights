@@ -1,7 +1,11 @@
 package goflights
 
 import (
+	"context"
 	"encoding/base64"
+	"errors"
+	"io"
+	"net/http"
 	"os"
 	"strings"
 	"testing"
@@ -619,4 +623,155 @@ func TestURLLocale(t *testing.T) {
 			})
 		}
 	})
+}
+
+// recordingTransport answers every request from a fixture, so the client can be
+// exercised without reaching Google.
+type recordingTransport struct {
+	body     string
+	requests []*http.Request
+}
+
+func (t *recordingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	t.requests = append(t.requests, r)
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Body:       io.NopCloser(strings.NewReader(t.body)),
+		Header:     make(http.Header),
+		Request:    r,
+	}, nil
+}
+
+// ExecuteWith must route through the caller's client while behaving exactly as
+// Execute otherwise, headers included.
+func TestExecuteWith(t *testing.T) {
+	page, err := os.ReadFile("testdata/page.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := &recordingTransport{body: string(page)}
+
+	got, err := NewRequest().Adults(1).Currency("EUR").
+		Flights(oneLeg()).
+		ExecuteWith(context.Background(), &http.Client{Transport: tr}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// testdata/page.html carries three itineraries.
+	if len(got) != 3 {
+		t.Errorf("decoded %d itineraries, want 3", len(got))
+	}
+	if len(tr.requests) != 1 {
+		t.Fatalf("client saw %d requests, want 1", len(tr.requests))
+	}
+
+	sent := tr.requests[0]
+	// The package still supplies the headers Google needs; a caller's client
+	// does not have to know about them.
+	if ua := sent.Header.Get("User-Agent"); !strings.Contains(ua, "Mozilla") {
+		t.Errorf("User-Agent = %q, want the browser one this package sets", ua)
+	}
+	// And the request the caller built is the one that went out.
+	if curr := sent.URL.Query().Get("curr"); curr != "EUR" {
+		t.Errorf("curr = %q, want EUR", curr)
+	}
+}
+
+// A nil client is the documented way to mean "the default one".
+func TestExecuteWithNilClient(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // fail before any network use, without asserting on the transport
+
+	_, err := NewRequest().Adults(1).Flights(oneLeg()).ExecuteWith(ctx, nil, nil)
+	if err == nil {
+		t.Fatal("want the cancelled context to surface")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v, want context.Canceled — a nil client should have fallen back, not panicked", err)
+	}
+}
+
+// Caller headers replace the default of the same name and are added alongside
+// the rest, so an override yields one value rather than two.
+func TestExecuteWithHeaders(t *testing.T) {
+	page, err := os.ReadFile("testdata/page.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		header http.Header
+		want   map[string][]string
+	}{
+		{
+			name:   "nil sends the defaults",
+			header: nil,
+			want: map[string][]string{
+				"User-Agent":      {userAgent},
+				"Accept-Language": {"en-US,en;q=0.9"},
+			},
+		},
+		{
+			name:   "override replaces rather than appends",
+			header: http.Header{"User-Agent": {"my-crawler/1.0"}},
+			want: map[string][]string{
+				"User-Agent":      {"my-crawler/1.0"},
+				"Accept-Language": {"en-US,en;q=0.9"},
+			},
+		},
+		{
+			name:   "extra headers are sent alongside",
+			header: http.Header{"X-Trace-Id": {"abc123"}},
+			want: map[string][]string{
+				"User-Agent": {userAgent},
+				"X-Trace-Id": {"abc123"},
+			},
+		},
+		{
+			// http.Header keys are canonicalised, so a lowercase key must
+			// still override rather than land beside the default.
+			name:   "non-canonical key still overrides",
+			header: http.Header{"user-agent": {"lowercase/1.0"}},
+			want:   map[string][]string{"User-Agent": {"lowercase/1.0"}},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := &recordingTransport{body: string(page)}
+			_, err := NewRequest().Adults(1).Flights(oneLeg()).
+				ExecuteWith(context.Background(), &http.Client{Transport: tr}, tc.header)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sent := tr.requests[0].Header
+			for name, want := range tc.want {
+				got := sent.Values(name)
+				if len(got) != len(want) || (len(got) > 0 && got[0] != want[0]) {
+					t.Errorf("%s = %q, want %q", name, got, want)
+				}
+			}
+		})
+	}
+}
+
+// The header map the caller passes must not be reachable from the request that
+// goes out, or a later edit would change a search already made.
+func TestExecuteWithHeadersNotAliased(t *testing.T) {
+	page, err := os.ReadFile("testdata/page.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr := &recordingTransport{body: string(page)}
+
+	caller := http.Header{"User-Agent": {"first/1.0"}}
+	if _, err := NewRequest().Adults(1).Flights(oneLeg()).
+		ExecuteWith(context.Background(), &http.Client{Transport: tr}, caller); err != nil {
+		t.Fatal(err)
+	}
+
+	caller["User-Agent"][0] = "mutated/2.0"
+	if got := tr.requests[0].Header.Get("User-Agent"); got != "first/1.0" {
+		t.Errorf("User-Agent = %q, want the value sent at the time", got)
+	}
 }

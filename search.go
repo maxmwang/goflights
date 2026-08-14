@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 )
 
 const (
@@ -15,6 +16,20 @@ const (
 	// maxBody caps the read; result pages run a few MB.
 	maxBody = 16 << 20
 )
+
+// defaultHeader is what every search sends unless the caller overrides it.
+//
+// The User-Agent is not decoration. Google returns a page with no results
+// block unless it recognises the value. Measured against live responses: full
+// browser strings and "curl/8.0" work, while "Go-http-client/1.1", an empty
+// value, a bare "Mozilla/5.0" and invented tokens such as "my-app/1.0" all
+// come back empty. A replacement has to be a string Google already knows.
+func defaultHeader() http.Header {
+	h := make(http.Header, 2)
+	h.Set("User-Agent", userAgent)
+	h.Set("Accept-Language", "en-US,en;q=0.9")
+	return h
+}
 
 // ErrPartialResults reports that Google server-rendered only a single
 // representative itinerary and deferred the rest to a follow-up RPC this
@@ -55,7 +70,11 @@ func (r *Request) resultsDeferred() bool {
 // order Google ranked them. It returns ErrNoFlights when the search matched
 // nothing, and ErrPartialResults — alongside the itineraries it did get — when
 // Google withheld the rest.
-func search(ctx context.Context, req *Request) ([]FlightOption, error) {
+func search(ctx context.Context, req *Request, client *http.Client, header http.Header) ([]FlightOption, error) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+
 	u, err := req.URL()
 	if err != nil {
 		return nil, err
@@ -65,12 +84,14 @@ func search(ctx context.Context, req *Request) ([]FlightOption, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Without a browser User-Agent, Google serves a consent interstitial
-	// instead of results.
-	hreq.Header.Set("User-Agent", userAgent)
-	hreq.Header.Set("Accept-Language", "en-US,en;q=0.9")
+	// Caller entries replace the defaults outright rather than adding to
+	// them, so overriding User-Agent yields one value and not two.
+	hreq.Header = defaultHeader()
+	for name, values := range header {
+		hreq.Header[http.CanonicalHeaderKey(name)] = slices.Clone(values)
+	}
 
-	resp, err := http.DefaultClient.Do(hreq)
+	resp, err := client.Do(hreq)
 	if err != nil {
 		return nil, fmt.Errorf("get: %w", err)
 	}

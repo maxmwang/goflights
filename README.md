@@ -9,6 +9,28 @@ scraping.
 go get github.com/maxmwang/goflights
 ```
 
+## Features
+
+- **Round-trip selection.** Pin a chosen outbound with `SelectOption` and the
+  next search returns the inbounds that pair with it, the way the site itself
+  works.
+- **Fares to the cent.** Results are decoded from each itinerary's booking
+  token — itself a protobuf message — so a fare arrives as `41100`, exact,
+  where the page itself only shows a rounded `411`.
+- **Filters map nearly one-to-one onto Google Flights.** Stops, airlines,
+  connecting airports, layover and duration bounds, departure and arrival
+  times, travel class, bags, price range, emissions, and more — see
+  [Filters](#filters).
+- **Per-segment detail.** Flight number, aircraft type and cabin for every
+  segment, enough to identify a flight rather than only price it.
+- **No key, cookie, or browser.** A plain GET with an ordinary `User-Agent` —
+  no abuse-exemption token to refresh, no captcha step, no WebDriver.
+- **Bring your own client.** `ExecuteWith` takes an `*http.Client` and header
+  overrides, so timeouts, proxies, retries, instrumentation and a custom
+  `User-Agent` stay yours to control.
+- **Parties of up to four.** One to four passengers return a full result list;
+  see [Limitations](#limitations) for what happens beyond that.
+
 ## Usage
 
 ```go
@@ -61,34 +83,46 @@ outbound.SelectOption(departures[0])
 returns, err := req.Execute(ctx)
 ```
 
+### Custom client and headers
+
+`ExecuteWith` runs the same search against a client and headers you supply.
+Both are optional — `nil` falls back to the default:
+
+```go
+client := &http.Client{Timeout: 20 * time.Second}
+header := http.Header{"X-Request-Id": {"abc123"}}
+
+options, err := req.ExecuteWith(ctx, client, header)
+```
+
 ### Filters
 
 Per leg, on `FlightInfo`:
 
-| Method | Effect |
-| --- | --- |
-| `MaxStops(n)` | Caps connections. `0` is nonstop only. |
-| `Airlines(codes...)` | Restricts the leg to those IATA airline codes. |
-| `ConnectingAirports(codes...)` | Restricts layovers to those airports. Nonstops are not excluded. |
-| `MinLayover(d)` / `MaxLayover(d)` | Bounds a connection's length. Nonstops are not excluded. |
-| `MaxDuration(d)` | Caps the whole leg gate to gate, not a single segment. |
-| `EarliestDepartureHour(h)` / `LatestDepartureHour(h)` | Local hour, `0`–`23`, inclusive. |
-| `EarliestArrivalHour(h)` / `LatestArrivalHour(h)` | Same, on arrival. A low latest arrival selects red-eyes. |
-| `LessEmissions()` | Keeps only itineraries Google marks as lower emission. |
+| Method                                                | Effect                                                           |
+| ----------------------------------------------------- | ---------------------------------------------------------------- |
+| `MaxStops(n)`                                         | Caps connections. `0` is nonstop only.                           |
+| `Airlines(codes...)`                                  | Restricts the leg to those IATA airline codes.                   |
+| `ConnectingAirports(codes...)`                        | Restricts layovers to those airports. Nonstops are not excluded. |
+| `MinLayover(d)` / `MaxLayover(d)`                     | Bounds a connection's length. Nonstops are not excluded.         |
+| `MaxDuration(d)`                                      | Caps the whole leg gate to gate, not a single segment.           |
+| `EarliestDepartureHour(h)` / `LatestDepartureHour(h)` | Local hour, `0`–`23`, inclusive.                                 |
+| `EarliestArrivalHour(h)` / `LatestArrivalHour(h)`     | Same, on arrival. A low latest arrival selects red-eyes.         |
+| `LessEmissions()`                                     | Keeps only itineraries Google marks as lower emission.           |
 
 Per search, on `Request`:
 
-| Method | Effect |
-| --- | --- |
-| `Adults(n)` / `Children(n)` / `InfantsInSeat(n)` / `InfantsOnLap(n)` | Builds the party. Nine passengers is the maximum. |
-| `Passengers(p...)` | Sets the party directly, instead of the counters above. |
-| `Class(c)` | Cabin to search. Results may still mix cabins across segments. |
-| `MaxPrice(n)` | Whole currency units, in the currency the search runs in. |
-| `CarryOnBag(n)` / `CheckedBag(n)` | Keeps only fares including that many bags. Filters rather than adds, so prices rise. |
-| `ExcludeBasicEconomy()` | Drops basic economy fares. |
-| `HideSeparateAndSelfTransfer()` | Unverified — no route probed produced such an itinerary. |
-| `Currency(code)` / `Language(code)` / `Region(code)` | Omitted when unset, leaving Google to infer them. |
-| `TripType(t)` | Checks the leg count against the trip. Multi city is not supported. |
+| Method                                                               | Effect                                                                               |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------ |
+| `Adults(n)` / `Children(n)` / `InfantsInSeat(n)` / `InfantsOnLap(n)` | Builds the party. Nine passengers is the maximum.                                    |
+| `Passengers(p...)`                                                   | Sets the party directly, instead of the counters above.                              |
+| `Class(c)`                                                           | Cabin to search. Results may still mix cabins across segments.                       |
+| `MaxPrice(n)`                                                        | Whole currency units, in the currency the search runs in.                            |
+| `CarryOnBag(n)` / `CheckedBag(n)`                                    | Keeps only fares including that many bags. Filters rather than adds, so prices rise. |
+| `ExcludeBasicEconomy()`                                              | Drops basic economy fares.                                                           |
+| `HideSeparateAndSelfTransfer()`                                      | Unverified — no route probed produced such an itinerary.                             |
+| `Currency(code)` / `Language(code)` / `Region(code)`                 | Omitted when unset, leaving Google to infer them.                                    |
+| `TripType(t)`                                                        | Checks the leg count against the trip. Multi city is not supported.                  |
 
 ## How it works
 
